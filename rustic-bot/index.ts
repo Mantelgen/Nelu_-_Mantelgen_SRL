@@ -56,7 +56,12 @@ client.on(Events.InteractionCreate, async (interaction: BaseInteraction) => {
     } catch (err) {
         const error = err as Error;
         console.error(error);
-		if (interaction.replied || interaction.deferred) {
+		if (interaction.deferred) {
+			await interaction.editReply({
+				content: 'There was an error while executing this command!',
+				embeds: [],
+			});
+		} else if (interaction.replied) {
 			await interaction.followUp({
 				content: 'There was an error while executing this command!',
 				flags: MessageFlags.Ephemeral,
