@@ -1,0 +1,48 @@
+name: Deploy All Projects to Raspberry Pi
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Find and Deploy All Docker Compose Projects
+        run: |
+          echo "Scanning repository for docker-compose files..."
+          
+          # Find all docker-compose.yml or docker-compose.yaml files
+          # We loop through each one found
+          find . -type f \( -name "docker-compose.yml" -o -name "docker-compose.yaml" \) | while read -r compose_file; do
+            
+            # Extract the directory path of the current compose file
+            project_dir=$(dirname "$compose_file")
+            
+            echo "------------------------------------------------"
+            echo "🚀 Deploying project found in: $project_dir"
+            echo "------------------------------------------------"
+            
+            # Navigate into the project folder
+            cd "$project_dir"
+            
+            # Rebuild and run the project
+            # -d: run in background
+            # --build: force rebuild of the images
+            # --remove-orphans: clean up removed containers
+            sudo docker compose up -d --build --remove-orphans
+            
+            # Return to the root repository directory before the next loop
+            cd "$GITHUB_WORKSPACE"
+            
+          done
+
+      - name: Clean up the Raspberry Pi
+        run: |
+          echo "Removing dangling images to save SD card space..."
+          sudo docker image prune -f
