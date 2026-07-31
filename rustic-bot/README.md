@@ -17,7 +17,7 @@ bun run dev
 Copy `.env.example` to `.env` and configure the RCON connection plus:
 
 ```dotenv
-STATUS_CHANNEL_IDS=first_channel_id,second_channel_id
+STATUS_CHANNEL_ID=first_channel_id,second_channel_id
 STATUS_CHECK_INTERVAL_SECONDS=30
 STATUS_CHECK_TIMEOUT_MS=5000
 ```
@@ -30,10 +30,10 @@ check and displays **Active** or **Stopped**, the player count, and online playe
 names in one private response. Because the response is ephemeral, using the
 command does not add messages to the channel.
 While the bot is running, it checks the server periodically and
-sends one alert to every channel in `STATUS_CHANNEL_IDS` when the state changes
+sends one alert to every channel in `STATUS_CHANNEL_ID` when the state changes
 from active to stopped. Configure one channel ID for each Discord server. The
-old `STATUS_CHANNEL_ID` setting is also supported. It also alerts if the
-Minecraft server is already stopped when the bot starts.
+setting accepts either one ID or multiple comma-separated IDs. It also alerts
+if the Minecraft server is already stopped when the bot starts.
 It will not repeatedly alert while the server remains offline, and a failed
 Discord delivery is retried during the next check.
 The bot needs **View Channel**, **Send Messages**, and **Embed Links**

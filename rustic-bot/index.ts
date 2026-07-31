@@ -140,10 +140,7 @@ async function announceStoppedServer(current: ServerStatusSnapshot): Promise<voi
 }
 
 function getStatusChannelIds(): string[] {
-    const configuredIds = [
-        ...(process.env.STATUS_CHANNEL_IDS ?? '').split(','),
-        process.env.STATUS_CHANNEL_ID ?? '',
-    ];
+    const configuredIds = (process.env.STATUS_CHANNEL_ID ?? '').split(',');
 
     return [...new Set(configuredIds.map((id) => id.trim()).filter(Boolean))];
 }
