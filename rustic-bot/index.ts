@@ -3,6 +3,7 @@ import SftpClient from "ssh2-sftp-client";
 import { SFTPManager } from "./src/sftp";
 import { RCONManager } from "./src/rcon";
 import { ServerStatusMonitor, type ServerStatusSnapshot } from "./src/serverStatus";
+import { registerGuildCommands } from "./src/registerCommands";
 import { loadCommands } from "./src/utils";
 
 export interface Command {
@@ -39,11 +40,23 @@ client.statusMonitor = new ServerStatusMonitor(
 client.once(Events.ClientReady, async (readyClient) => {
     console.log(`Logged in as ${readyClient.user.tag}`)
 
+    for (const guild of readyClient.guilds.cache.values()) {
+        registerGuildCommands(guild, client.commands).catch((err) => {
+            console.error(`Failed to register commands in ${guild.name}:`, err);
+        });
+    }
+
     // Whitelist/SFTP availability must not prevent status monitoring from
     // starting. RCON health checks reconnect as needed by themselves.
     void client.sftpManager.connect();
     await client.statusMonitor.start();
 })
+
+client.on(Events.GuildCreate, (guild) => {
+    registerGuildCommands(guild, client.commands).catch((err) => {
+        console.error(`Failed to register commands in ${guild.name}:`, err);
+    });
+});
 
 client.on(Events.InteractionCreate, async (interaction: BaseInteraction) => {
     if (!interaction.isChatInputCommand()) return;
@@ -82,18 +95,17 @@ function readPositiveNumber(name: string, fallback: number): number {
     return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-async function announceStoppedServer(current: ServerStatusSnapshot): Promise<void> {
-    if (current.status !== 'stopped') return;
+const notifiedStatusChannels = new Set<string>();
 
-    const channelId = process.env.STATUS_CHANNEL_ID;
-    if (!channelId) {
-        console.warn('The server stopped, but STATUS_CHANNEL_ID is not configured.');
+async function announceStoppedServer(current: ServerStatusSnapshot): Promise<void> {
+    if (current.status !== 'stopped') {
+        notifiedStatusChannels.clear();
         return;
     }
 
-    const channel = await client.channels.fetch(channelId);
-    if (!channel?.isSendable()) {
-        console.error(`STATUS_CHANNEL_ID (${channelId}) is not a text channel the bot can access.`);
+    const channelIds = getStatusChannelIds();
+    if (channelIds.length === 0) {
+        console.warn('The server stopped, but no status alert channels are configured.');
         return;
     }
 
@@ -103,5 +115,35 @@ async function announceStoppedServer(current: ServerStatusSnapshot): Promise<voi
         .setDescription('The server stopped responding to health checks. It may have stopped or crashed.')
         .setTimestamp(current.checkedAt);
 
-    await channel.send({ embeds: [embed] });
+    const failedChannelIds: string[] = [];
+
+    for (const channelId of channelIds) {
+        if (notifiedStatusChannels.has(channelId)) continue;
+
+        try {
+            const channel = await client.channels.fetch(channelId);
+            if (!channel?.isSendable()) {
+                throw new Error('channel is not accessible or sendable');
+            }
+
+            await channel.send({ embeds: [embed] });
+            notifiedStatusChannels.add(channelId);
+        } catch (err) {
+            console.error(`Failed to alert status channel ${channelId}:`, err);
+            failedChannelIds.push(channelId);
+        }
+    }
+
+    if (failedChannelIds.length > 0) {
+        throw new Error(`Failed to alert ${failedChannelIds.length} configured status channel(s).`);
+    }
+}
+
+function getStatusChannelIds(): string[] {
+    const configuredIds = [
+        ...(process.env.STATUS_CHANNEL_IDS ?? '').split(','),
+        process.env.STATUS_CHANNEL_ID ?? '',
+    ];
+
+    return [...new Set(configuredIds.map((id) => id.trim()).filter(Boolean))];
 }
