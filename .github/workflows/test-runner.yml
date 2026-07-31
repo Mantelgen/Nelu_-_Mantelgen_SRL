@@ -1,0 +1,25 @@
+name: Test Self-Hosted Runner
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # This allows you to trigger the test manually via a button
+
+jobs:
+  test-connection:
+    # This label tells GitHub to look for your self-hosted machine
+    runs-on: self-hosted
+
+    steps:
+      - name: Verify system details
+        run: |
+          echo "✅ Runner is successfully connected!"
+          echo "Hostname: $(hostname)"
+          echo "Current User: $(whoami)"
+          
+      - name: Verify Docker access
+        run: |
+          echo "Checking if this runner has permission to use Docker..."
+          docker --version
+          docker ps
