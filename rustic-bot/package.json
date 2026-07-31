@@ -6,6 +6,8 @@
   "scripts": {
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit",
     "dev": "bun --env-file=.env index.ts",
     "deploy": "bun deploy_commands.ts"
   },

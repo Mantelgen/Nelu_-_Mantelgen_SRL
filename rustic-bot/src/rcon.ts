@@ -46,7 +46,7 @@ export class RCONManager {
             await connection.connect();
 
             if (this.client !== connection) {
-                await connection.disconnect().catch(() => undefined);
+                await connection.end().catch(() => undefined);
                 return;
             }
 
@@ -71,7 +71,7 @@ export class RCONManager {
         this.clearReconnectTimer();
 
         if (oldClient) {
-            try { await oldClient.disconnect(); } catch { /* already closed */ }
+            try { await oldClient.end(); } catch { /* already closed */ }
         }
 
         await this.connect();
@@ -93,13 +93,23 @@ export class RCONManager {
     }
 
     async checkHealth(timeoutMs = 5000): Promise<boolean> {
-        if (!this.isConnected || !this.client) return false;
-
         let timeout: ReturnType<typeof setTimeout> | undefined;
 
         try {
             await Promise.race([
-                this.sendCommand('list'),
+                (async () => {
+                    // Make a fresh reconnection attempt instead of reporting
+                    // "stopped" while the reconnect timer is still pending.
+                    if (!this.isConnected || !this.client) {
+                        await this.connect();
+                    }
+
+                    if (!this.isConnected || !this.client) {
+                        throw new Error('RCON is disconnected');
+                    }
+
+                    await this.sendCommand('list');
+                })(),
                 new Promise<never>((_, reject) => {
                     timeout = setTimeout(() => reject(new Error('RCON health check timed out')), timeoutMs);
                 }),
@@ -122,7 +132,7 @@ export class RCONManager {
         console.warn(`${reason} - Attempting to reconnect...`);
         this.client = null;
         this.isConnected = false;
-        connection.disconnect().catch(() => undefined);
+        connection.end().catch(() => undefined);
         this.scheduleReconnect();
     }
 
