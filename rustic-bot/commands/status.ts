@@ -41,7 +41,7 @@ export default {
 
         await interaction.editReply({ embeds: [statusEmbed] });
 
-        if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return;
+        if (!canViewPlayerNames(interaction)) return;
 
         const playerEmbed = new EmbedBuilder()
             .setColor(0x5865F2)
@@ -64,6 +64,21 @@ export default {
         });
     },
 };
+
+function canViewPlayerNames(interaction: ChatInputCommandInteraction): boolean {
+    if (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        return true;
+    }
+
+    if (!interaction.inCachedGuild()) return false;
+
+    const configuredModeratorRoleId = process.env.MOD_ROLE_ID?.trim();
+
+    return interaction.member.roles.cache.some((role) =>
+        (configuredModeratorRoleId && role.id === configuredModeratorRoleId)
+        || role.name.toLocaleLowerCase() === 'moderatori',
+    );
+}
 
 function formatPlayerNames(players: string[]): string {
     if (players.length === 0) return 'No players are currently online.';

@@ -26,8 +26,9 @@ Minecraft must have RCON enabled and the values of `RCON_HOST`, `RCON_PORT`,
 and `RCON_PASSWORD` must match the server's `server.properties` settings.
 
 The `/status` command performs a fresh RCON health check and publicly displays
-**Active** or **Stopped**, plus the number of online players. Administrators who
-run the command also receive a private list of the online player names.
+**Active** or **Stopped**, plus the number of online players. Users with the
+Discord **Administrator** permission, the configured `MOD_ROLE_ID`, or a role
+named **Moderatori** also receive a private list of the online player names.
 While the bot is running, it checks the server periodically and
 sends one alert to `STATUS_CHANNEL_ID` when the state changes from active to
 stopped. It also alerts if the server is already stopped when the bot starts.
