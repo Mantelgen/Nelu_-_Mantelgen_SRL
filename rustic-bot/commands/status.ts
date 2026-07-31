@@ -1,4 +1,10 @@
-import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags, SlashCommandBuilder } from 'discord.js';
+import {
+    ChatInputCommandInteraction,
+    EmbedBuilder,
+    MessageFlags,
+    PermissionFlagsBits,
+    SlashCommandBuilder,
+} from 'discord.js';
 import type { MyClient } from '..';
 
 export default {
@@ -6,13 +12,15 @@ export default {
         .setName('status')
         .setDescription('Shows whether the Minecraft server is active or stopped'),
     async execute(interaction: ChatInputCommandInteraction) {
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        // The server status is public so everyone in the channel can see it.
+        await interaction.deferReply();
 
-        const { statusMonitor } = interaction.client as MyClient;
+        const { statusMonitor, rconManager } = interaction.client as MyClient;
         const snapshot = await statusMonitor.checkNow();
+        const playerList = rconManager.getLastPlayerList();
         const isActive = snapshot.status === 'active';
 
-        const embed = new EmbedBuilder()
+        const statusEmbed = new EmbedBuilder()
             .setColor(isActive ? 0x57F287 : 0xED4245)
             .setTitle('Minecraft Server Status')
             .addFields({
@@ -23,6 +31,54 @@ export default {
             .setFooter({ text: 'Last checked' })
             .setTimestamp(snapshot.checkedAt);
 
-        await interaction.editReply({ embeds: [embed] });
+        if (isActive && playerList) {
+            statusEmbed.addFields({
+                name: 'Players Online',
+                value: `${playerList.onlinePlayers}/${playerList.maxPlayers}`,
+                inline: true,
+            });
+        }
+
+        await interaction.editReply({ embeds: [statusEmbed] });
+
+        if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return;
+
+        const playerEmbed = new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle('Online Minecraft Players')
+            .setDescription(
+                playerList
+                    ? formatPlayerNames(playerList.players)
+                    : 'The player list is currently unavailable.',
+            );
+
+        if (playerList) {
+            playerEmbed.setFooter({
+                text: `${playerList.onlinePlayers}/${playerList.maxPlayers} players online`,
+            });
+        }
+
+        await interaction.followUp({
+            embeds: [playerEmbed],
+            flags: MessageFlags.Ephemeral,
+        });
     },
 };
+
+function formatPlayerNames(players: string[]): string {
+    if (players.length === 0) return 'No players are currently online.';
+
+    const maxLength = 3_900;
+    const visible: string[] = [];
+
+    for (const player of players) {
+        const candidate = [...visible, player].join(', ');
+        if (candidate.length > maxLength) break;
+        visible.push(player);
+    }
+
+    const hiddenCount = players.length - visible.length;
+    return hiddenCount > 0
+        ? `${visible.join(', ')}\n…and ${hiddenCount} more.`
+        : visible.join(', ');
+}

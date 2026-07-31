@@ -1,7 +1,15 @@
 import { Rcon } from 'rcon-client';
 
+export interface PlayerListSnapshot {
+    onlinePlayers: number;
+    maxPlayers: number;
+    players: string[];
+    checkedAt: Date;
+}
+
 export class RCONManager {
     private client: Rcon | null = null;
+    private lastPlayerList: PlayerListSnapshot | null = null;
     public isConnected = false;
     private connectPromise: Promise<void> | null = null;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -96,7 +104,7 @@ export class RCONManager {
         let timeout: ReturnType<typeof setTimeout> | undefined;
 
         try {
-            await Promise.race([
+            const response = await Promise.race([
                 (async () => {
                     // Make a fresh reconnection attempt instead of reporting
                     // "stopped" while the reconnect timer is still pending.
@@ -108,14 +116,16 @@ export class RCONManager {
                         throw new Error('RCON is disconnected');
                     }
 
-                    await this.sendCommand('list');
+                    return this.sendCommand('list');
                 })(),
                 new Promise<never>((_, reject) => {
                     timeout = setTimeout(() => reject(new Error('RCON health check timed out')), timeoutMs);
                 }),
             ]);
+            this.lastPlayerList = parsePlayerList(response);
             return true;
         } catch {
+            this.lastPlayerList = null;
             const connection = this.client;
             if (connection) {
                 this.handleDisconnect(connection, 'RCON health check failed');
@@ -124,6 +134,15 @@ export class RCONManager {
         } finally {
             if (timeout) clearTimeout(timeout);
         }
+    }
+
+    getLastPlayerList(): PlayerListSnapshot | null {
+        if (!this.lastPlayerList) return null;
+
+        return {
+            ...this.lastPlayerList,
+            players: [...this.lastPlayerList.players],
+        };
     }
 
     private handleDisconnect(connection: Rcon, reason: string): void {
@@ -150,4 +169,22 @@ export class RCONManager {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
     }
+}
+
+export function parsePlayerList(response: string): PlayerListSnapshot | null {
+    const match = response.match(
+        /There are\s+(\d+)\s+of a max of\s+(\d+)\s+players online:?\s*(.*)/is,
+    );
+    if (!match) return null;
+
+    const playerText = (match[3] ?? '').trim();
+
+    return {
+        onlinePlayers: Number.parseInt(match[1]!, 10),
+        maxPlayers: Number.parseInt(match[2]!, 10),
+        players: playerText
+            ? playerText.split(',').map((name) => name.trim()).filter(Boolean)
+            : [],
+        checkedAt: new Date(),
+    };
 }
