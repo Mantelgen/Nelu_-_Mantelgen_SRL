@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          clean: false
         
       - name: Find and Deploy All Docker Compose Projects
         run: |
