@@ -9,9 +9,7 @@ export default {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const { statusMonitor } = interaction.client as MyClient;
-        const snapshot = statusMonitor
-            ? await statusMonitor.checkNow()
-            : { status: 'stopped' as const, checkedAt: new Date() };
+        const snapshot = await statusMonitor.checkNow();
         const isActive = snapshot.status === 'active';
 
         const embed = new EmbedBuilder()

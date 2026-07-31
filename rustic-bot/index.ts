@@ -14,39 +14,34 @@ export class MyClient extends Client {
     commands: Collection<string, Command> = new Collection();
     sftpManager!: SFTPManager;
     rconManager!: RCONManager;
-    statusMonitor?: ServerStatusMonitor;
+    statusMonitor!: ServerStatusMonitor;
 }
 const client = new MyClient({intents: [GatewayIntentBits.Guilds]})
 
 client.commands = loadCommands();
 
+const sftpConfig: SftpClient.ConnectOptions = {
+    host: process.env.SFTP_HOST,
+    port: process.env.SFTP_PORT ? parseInt(process.env.SFTP_PORT, 10) : 2022,
+    username: process.env.SFTP_USER,
+    password: process.env.SFTP_PASSWORD,
+};
+
+client.sftpManager = new SFTPManager(sftpConfig);
+client.rconManager = new RCONManager();
+client.statusMonitor = new ServerStatusMonitor(
+    client.rconManager,
+    announceStoppedServer,
+    readPositiveNumber('STATUS_CHECK_INTERVAL_SECONDS', 30) * 1000,
+    readPositiveNumber('STATUS_CHECK_TIMEOUT_MS', 5000),
+);
+
 client.once(Events.ClientReady, async (readyClient) => {
     console.log(`Logged in as ${readyClient.user.tag}`)
 
-    const config: SftpClient.ConnectOptions = {
-        host: process.env.SFTP_HOST,
-        port: process.env.SFTP_PORT ? parseInt(process.env.SFTP_PORT) : 2022,
-        username: process.env.SFTP_USER,
-        password: process.env.SFTP_PASSWORD
-    }
-
-    client.sftpManager = new SFTPManager(config);
-    client.rconManager = new RCONManager();
-
-    await Promise.all([
-        client.sftpManager.connect(),
-        client.rconManager.connect(),
-    ]);
-
-    const intervalMs = readPositiveNumber('STATUS_CHECK_INTERVAL_SECONDS', 30) * 1000;
-    const timeoutMs = readPositiveNumber('STATUS_CHECK_TIMEOUT_MS', 5000);
-
-    client.statusMonitor = new ServerStatusMonitor(
-        client.rconManager,
-        announceStoppedServer,
-        intervalMs,
-        timeoutMs,
-    );
+    // Whitelist/SFTP availability must not prevent status monitoring from
+    // starting. RCON health checks reconnect as needed by themselves.
+    void client.sftpManager.connect();
     await client.statusMonitor.start();
 })
 
