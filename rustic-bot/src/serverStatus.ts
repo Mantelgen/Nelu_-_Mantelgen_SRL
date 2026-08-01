@@ -15,12 +15,14 @@ export class ServerStatusMonitor {
     private checkPromise: Promise<ServerStatusSnapshot> | null = null;
     private interval: ReturnType<typeof setInterval> | null = null;
     private stoppedAnnouncementPending = false;
+    private consecutiveFailures = 0;
 
     constructor(
         private readonly healthChecker: HealthChecker,
         private readonly onStatusChange: StatusChangeHandler,
         private readonly intervalMs = 30_000,
         private readonly timeoutMs = 5_000,
+        private readonly failureThreshold = 3,
     ) {}
 
     async start(): Promise<void> {
@@ -57,6 +59,8 @@ export class ServerStatusMonitor {
 
     private async performCheck(): Promise<ServerStatusSnapshot> {
         const isHealthy = await this.healthChecker.checkHealth(this.timeoutMs);
+        this.consecutiveFailures = isHealthy ? 0 : this.consecutiveFailures + 1;
+
         const next: ServerStatusSnapshot = {
             status: isHealthy ? 'active' : 'stopped',
             checkedAt: new Date(),
@@ -67,7 +71,11 @@ export class ServerStatusMonitor {
 
         const changed = previous !== undefined && previous !== next.status;
 
-        if (next.status === 'stopped' && (previous === undefined || changed)) {
+        if (
+            next.status === 'stopped'
+            && this.consecutiveFailures === this.failureThreshold
+            && !this.stoppedAnnouncementPending
+        ) {
             this.stoppedAnnouncementPending = true;
         } else if (next.status === 'active') {
             this.stoppedAnnouncementPending = false;
@@ -82,7 +90,7 @@ export class ServerStatusMonitor {
             } catch (err) {
                 console.error('Failed to announce server status change:', err);
             }
-        } else if (changed) {
+        } else if (changed && next.status === 'active') {
             try {
                 await this.onStatusChange(next, previous);
             } catch (err) {

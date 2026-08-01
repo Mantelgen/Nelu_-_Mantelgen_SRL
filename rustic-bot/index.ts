@@ -35,6 +35,7 @@ client.statusMonitor = new ServerStatusMonitor(
     announceStoppedServer,
     readPositiveNumber('STATUS_CHECK_INTERVAL_SECONDS', 30) * 1000,
     readPositiveNumber('STATUS_CHECK_TIMEOUT_MS', 5000),
+    readPositiveInteger('STATUS_FAILURE_THRESHOLD', 3),
 );
 
 client.once(Events.ClientReady, async (readyClient) => {
@@ -93,6 +94,11 @@ client.login(process.env.APP_TOKEN)
 function readPositiveNumber(name: string, fallback: number): number {
     const value = Number(process.env[name]);
     return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function readPositiveInteger(name: string, fallback: number): number {
+    const value = Number(process.env[name]);
+    return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
 const notifiedStatusChannels = new Set<string>();

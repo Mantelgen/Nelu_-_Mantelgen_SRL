@@ -20,6 +20,7 @@ Copy `.env.example` to `.env` and configure the RCON connection plus:
 STATUS_CHANNEL_ID=first_channel_id,second_channel_id
 STATUS_CHECK_INTERVAL_SECONDS=30
 STATUS_CHECK_TIMEOUT_MS=5000
+STATUS_FAILURE_THRESHOLD=3
 ```
 
 Minecraft must have RCON enabled and the values of `RCON_HOST`, `RCON_PORT`,
@@ -33,7 +34,9 @@ While the bot is running, it checks the server periodically and
 sends one alert to every channel in `STATUS_CHANNEL_ID` when the state changes
 from active to stopped. Configure one channel ID for each Discord server. The
 setting accepts either one ID or multiple comma-separated IDs. It also alerts
-if the Minecraft server is already stopped when the bot starts.
+if the Minecraft server is already stopped when the bot starts. To avoid false
+positives during brief RCON or network interruptions, an outage is announced
+only after `STATUS_FAILURE_THRESHOLD` consecutive failed checks.
 It will not repeatedly alert while the server remains offline, and a failed
 Discord delivery is retried during the next check.
 The bot needs **View Channel**, **Send Messages**, and **Embed Links**
