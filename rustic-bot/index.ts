@@ -1,8 +1,7 @@
-import { BaseInteraction, ChatInputCommandInteraction, Client, Collection, EmbedBuilder, Events, GatewayIntentBits, MessageFlags, SlashCommandBuilder, type SlashCommandOptionsOnlyBuilder } from "discord.js";
+import { BaseInteraction, ChatInputCommandInteraction, Client, Collection, Events, GatewayIntentBits, MessageFlags, SlashCommandBuilder, type SlashCommandOptionsOnlyBuilder } from "discord.js";
 import SftpClient from "ssh2-sftp-client";
 import { SFTPManager } from "./src/sftp";
 import { RCONManager } from "./src/rcon";
-import { ServerStatusMonitor, type ServerStatusSnapshot } from "./src/serverStatus";
 import { registerGuildCommands } from "./src/registerCommands";
 import { loadCommands } from "./src/utils";
 
@@ -15,7 +14,6 @@ export class MyClient extends Client {
     commands: Collection<string, Command> = new Collection();
     sftpManager!: SFTPManager;
     rconManager!: RCONManager;
-    statusMonitor!: ServerStatusMonitor;
 }
 const client = new MyClient({intents: [GatewayIntentBits.Guilds]})
 
@@ -30,15 +28,7 @@ const sftpConfig: SftpClient.ConnectOptions = {
 
 client.sftpManager = new SFTPManager(sftpConfig);
 client.rconManager = new RCONManager();
-client.statusMonitor = new ServerStatusMonitor(
-    client.rconManager,
-    announceStoppedServer,
-    readPositiveNumber('STATUS_CHECK_INTERVAL_SECONDS', 30) * 1000,
-    readPositiveNumber('STATUS_CHECK_TIMEOUT_MS', 5000),
-    readPositiveInteger('STATUS_FAILURE_THRESHOLD', 3),
-);
-
-client.once(Events.ClientReady, async (readyClient) => {
+client.once(Events.ClientReady, (readyClient) => {
     console.log(`Logged in as ${readyClient.user.tag}`)
 
     for (const guild of readyClient.guilds.cache.values()) {
@@ -47,10 +37,7 @@ client.once(Events.ClientReady, async (readyClient) => {
         });
     }
 
-    // Whitelist/SFTP availability must not prevent status monitoring from
-    // starting. RCON health checks reconnect as needed by themselves.
     void client.sftpManager.connect();
-    await client.statusMonitor.start();
 })
 
 client.on(Events.GuildCreate, (guild) => {
@@ -90,63 +77,3 @@ client.on(Events.InteractionCreate, async (interaction: BaseInteraction) => {
 })
 
 client.login(process.env.APP_TOKEN)
-
-function readPositiveNumber(name: string, fallback: number): number {
-    const value = Number(process.env[name]);
-    return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-function readPositiveInteger(name: string, fallback: number): number {
-    const value = Number(process.env[name]);
-    return Number.isInteger(value) && value > 0 ? value : fallback;
-}
-
-const notifiedStatusChannels = new Set<string>();
-
-async function announceStoppedServer(current: ServerStatusSnapshot): Promise<void> {
-    if (current.status !== 'stopped') {
-        notifiedStatusChannels.clear();
-        return;
-    }
-
-    const channelIds = getStatusChannelIds();
-    if (channelIds.length === 0) {
-        console.warn('The server stopped, but no status alert channels are configured.');
-        return;
-    }
-
-    const embed = new EmbedBuilder()
-        .setColor(0xED4245)
-        .setTitle('🔴 Minecraft server is offline')
-        .setDescription('The server stopped responding to health checks. It may have stopped or crashed.')
-        .setTimestamp(current.checkedAt);
-
-    const failedChannelIds: string[] = [];
-
-    for (const channelId of channelIds) {
-        if (notifiedStatusChannels.has(channelId)) continue;
-
-        try {
-            const channel = await client.channels.fetch(channelId);
-            if (!channel?.isSendable()) {
-                throw new Error('channel is not accessible or sendable');
-            }
-
-            await channel.send({ embeds: [embed] });
-            notifiedStatusChannels.add(channelId);
-        } catch (err) {
-            console.error(`Failed to alert status channel ${channelId}:`, err);
-            failedChannelIds.push(channelId);
-        }
-    }
-
-    if (failedChannelIds.length > 0) {
-        throw new Error(`Failed to alert ${failedChannelIds.length} configured status channel(s).`);
-    }
-}
-
-function getStatusChannelIds(): string[] {
-    const configuredIds = (process.env.STATUS_CHANNEL_ID ?? '').split(',');
-
-    return [...new Set(configuredIds.map((id) => id.trim()).filter(Boolean))];
-}
