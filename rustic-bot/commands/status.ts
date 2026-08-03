@@ -14,10 +14,10 @@ export default {
         // One private response prevents command use from filling the channel.
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        const { statusMonitor, rconManager } = interaction.client as MyClient;
-        const snapshot = await statusMonitor.checkNow();
+        const { rconManager } = interaction.client as MyClient;
+        const isActive = await rconManager.checkHealth();
+        const checkedAt = new Date();
         const playerList = rconManager.getLastPlayerList();
-        const isActive = snapshot.status === 'active';
 
         const statusEmbed = new EmbedBuilder()
             .setColor(isActive ? 0x57F287 : 0xED4245)
@@ -28,7 +28,7 @@ export default {
                 inline: true,
             })
             .setFooter({ text: 'Last checked' })
-            .setTimestamp(snapshot.checkedAt);
+            .setTimestamp(checkedAt);
 
         if (isActive && playerList) {
             statusEmbed.addFields(
