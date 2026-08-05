@@ -44,8 +44,10 @@ DISCORD_TOKEN=your_discord_token_here
 SPOTIFY_CLIENT_ID=your_spotify_client_id_here
 SPOTIFY_CLIENT_SECRET=your_spotify_client_secret_here
 PREFIX=!
-DJ_ROLE_NAME=Prieteni
-MUSIC_IDLE_TIMEOUT_MINUTES=3
+MUSIC_IDLE_TIMEOUT_MINUTES=10
+FFMPEG_EXECUTABLE=ffmpeg
+VOICE_CONNECT_TIMEOUT_SECONDS=30
+VOICE_CONNECT_RETRIES=1
 YTDLP_COOKIES_FILE=/absolute/path/to/secrets/youtube_cookies.txt
 ```
 
@@ -76,3 +78,5 @@ bash run.sh
 
 - Keep `.env` private and never commit it.
 - Keep `secrets/` private and out of version control.
+- Enable the Message Content Intent for the bot in the Discord Developer Portal.
+- Users must join the bot's voice channel before adding music or using player buttons.

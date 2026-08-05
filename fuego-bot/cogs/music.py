@@ -1,14 +1,15 @@
+import asyncio
 import random
 from collections import deque
-from typing import Optional
 
 import discord
 from discord.ext import commands
 
 from app.config import (
     FFMPEG_EXECUTABLE,
-    FFPROBE_EXECUTABLE,
     RADIO_STATIONS,
+    VOICE_CONNECT_RETRIES,
+    VOICE_CONNECT_TIMEOUT_SECONDS,
 )
 from app.models.music import GuildMusicState, Song
 from app.services.music_resolver import MusicResolverService
@@ -16,7 +17,11 @@ from app.services.music_runtime import MusicRuntimeService
 from app.ui.music_views import FuegoControlsView, PlayerControlsView
 
 print(f"[INFO] Using ffmpeg:  {FFMPEG_EXECUTABLE}")
-print(f"[INFO] Using ffprobe: {FFPROBE_EXECUTABLE}")
+
+
+class VoiceConnectionError(RuntimeError):
+    pass
+
 
 # ─── Music Cog ──────────────────────────────────────────────────────────────────
 
@@ -25,14 +30,36 @@ class Music(commands.Cog):
         self.bot = bot
         self._states: dict[int, GuildMusicState] = {}
         self.resolver = MusicResolverService()
-        self.runtime = MusicRuntimeService(bot=bot, get_state=self.get_state)
+        self.runtime = MusicRuntimeService(get_state=self.get_state)
+
+    async def cog_check(self, ctx: commands.Context) -> bool:
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage()
+        return True
 
     def get_state(self, guild_id: int) -> GuildMusicState:
         if guild_id not in self._states:
             self._states[guild_id] = GuildMusicState()
-        return self._states[guild_id]
+        state = self._states[guild_id]
+        guild = self.bot.get_guild(guild_id)
+        if guild and guild.voice_client and guild.voice_client.is_connected():
+            state.voice_client = guild.voice_client
+        return state
 
-    def _make_embed(self, title: str, description: Optional[str] = None, color: Optional[discord.Color] = None) -> discord.Embed:
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member, before, after):
+        if not self.bot.user or member.id != self.bot.user.id or after.channel is not None:
+            return
+        state = self.get_state(member.guild.id)
+        self.runtime.cancel_idle_disconnect(state)
+        self.runtime.clear_queue(state)
+        if state.current:
+            self.runtime.cleanup_song(state.current)
+        state.current = None
+        state.interrupted_song = None
+        state.voice_client = None
+
+    def _make_embed(self, title: str, description: str | None = None, color: discord.Color | None = None) -> discord.Embed:
         embed = discord.Embed(
             title=title,
             description=description,
@@ -41,12 +68,88 @@ class Music(commands.Cog):
         embed.set_footer(text="Fuego Music")
         return embed
 
-    def _song_embed(self, title: str, song: Song, color: Optional[discord.Color] = None) -> discord.Embed:
+    def _song_embed(self, title: str, song: Song, color: discord.Color | None = None) -> discord.Embed:
         embed = self._make_embed(title, color=color)
         embed.add_field(name="Track", value=song.title, inline=False)
         embed.add_field(name="Duration", value=song.format_duration(), inline=True)
         embed.add_field(name="Requested by", value=song.requester.display_name, inline=True)
         return embed
+
+    async def _discard_voice_client(self, state: GuildMusicState, guild: discord.Guild) -> None:
+        voice_client = guild.voice_client or state.voice_client
+        state.voice_client = None
+        if voice_client is None:
+            return
+
+        try:
+            await voice_client.disconnect(force=True)
+        except Exception as error:  # noqa: BLE001 - cleanup must continue after a failed handshake.
+            print(f"[WARN] Failed to disconnect stale voice client in guild {guild.id}: {error}")
+        finally:
+            # disconnect() normally calls cleanup itself. Calling it again is safe
+            # and removes a half-connected client from Discord.py's connection map.
+            voice_client.cleanup()
+
+    async def _connect_voice(
+        self,
+        guild: discord.Guild,
+        channel: discord.VoiceChannel | discord.StageChannel,
+    ) -> discord.VoiceClient:
+        state = self.get_state(guild.id)
+        async with state.connect_lock:
+            current = guild.voice_client or state.voice_client
+            if current and current.is_connected():
+                state.voice_client = current
+                if current.channel != channel:
+                    try:
+                        await current.move_to(channel, timeout=VOICE_CONNECT_TIMEOUT_SECONDS)
+                    except TimeoutError as error:
+                        raise VoiceConnectionError("Timed out while moving to your voice channel.") from error
+                return current
+
+            if current is not None:
+                await self._discard_voice_client(state, guild)
+
+            attempts = VOICE_CONNECT_RETRIES + 1
+            for attempt in range(1, attempts + 1):
+                try:
+                    voice_client = await channel.connect(
+                        timeout=VOICE_CONNECT_TIMEOUT_SECONDS,
+                        reconnect=True,
+                        self_deaf=True,
+                    )
+                    state.voice_client = voice_client
+                    return voice_client
+                except TimeoutError as error:
+                    print(
+                        f"[WARN] Voice connection timed out in guild {guild.id} "
+                        f"(attempt {attempt}/{attempts})"
+                    )
+                    await self._discard_voice_client(state, guild)
+                    if attempt < attempts:
+                        await asyncio.sleep(2)
+                        continue
+                    raise VoiceConnectionError(
+                        "Discord did not complete the voice handshake. Please try again in a few seconds."
+                    ) from error
+                except discord.Forbidden as error:
+                    await self._discard_voice_client(state, guild)
+                    raise VoiceConnectionError(
+                        "I need the Connect and Speak permissions in that voice channel."
+                    ) from error
+                except discord.ClientException as error:
+                    # A timed-out connection can remain registered briefly. Clean
+                    # it up and retry rather than reporting 'already connected'.
+                    await self._discard_voice_client(state, guild)
+                    if attempt < attempts:
+                        await asyncio.sleep(2)
+                        continue
+                    raise VoiceConnectionError(f"Could not connect to voice: {error}") from error
+                except discord.HTTPException as error:
+                    await self._discard_voice_client(state, guild)
+                    raise VoiceConnectionError("Discord rejected the voice connection request.") from error
+
+        raise VoiceConnectionError("Could not connect to the voice channel.")
 
 
     # ── Commands ─────────────────────────────────────────────────────────────────
@@ -57,10 +160,10 @@ class Music(commands.Cog):
             return await ctx.send("You need to be in a voice channel first.")
         channel = ctx.author.voice.channel
         state = self.get_state(ctx.guild.id)
-        if state.voice_client and state.voice_client.is_connected():
-            await state.voice_client.move_to(channel)
-        else:
-            state.voice_client = await channel.connect()
+        try:
+            state.voice_client = await self._connect_voice(ctx.guild, channel)
+        except VoiceConnectionError as error:
+            return await ctx.send(f"Voice connection failed: {error}")
         await self.runtime.refresh_idle_disconnect(ctx.guild.id)
         await ctx.send(embed=self._make_embed("✅ Joined Voice", f"Connected to **{channel.name}**."))
 
@@ -70,8 +173,9 @@ class Music(commands.Cog):
         if not state.voice_client or not state.voice_client.is_connected():
             return await ctx.send("I'm not in a voice channel.")
         self.runtime.cancel_idle_disconnect(state)
-        state.queue.clear()
+        self.runtime.clear_queue(state)
         state.current = None
+        state.interrupted_song = None
         await state.voice_client.disconnect()
         state.voice_client = None
         await ctx.send(embed=self._make_embed("👋 Disconnected", "Left the voice channel."))
@@ -83,8 +187,17 @@ class Music(commands.Cog):
             return await ctx.send("You need to be in a voice channel first.")
 
         state = self.get_state(ctx.guild.id)
+        if (
+            state.voice_client
+            and state.voice_client.is_connected()
+            and state.voice_client.channel != ctx.author.voice.channel
+        ):
+            return await ctx.send("Join my voice channel before adding music.")
         if not state.voice_client or not state.voice_client.is_connected():
-            state.voice_client = await ctx.author.voice.channel.connect()
+            try:
+                state.voice_client = await self._connect_voice(ctx.guild, ctx.author.voice.channel)
+            except VoiceConnectionError as error:
+                return await ctx.send(f"Voice connection failed: {error}")
         self.runtime.cancel_idle_disconnect(state)
 
         async with ctx.typing():
@@ -92,7 +205,7 @@ class Music(commands.Cog):
                 songs = await self.resolver.resolve_query(query, ctx.author)
             except ValueError as e:
                 return await ctx.send(f"Error: {e}")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - convert provider errors to a user response.
                 return await ctx.send(f"Something went wrong: {e}")
 
         if not songs:
@@ -133,13 +246,22 @@ class Music(commands.Cog):
                 await self.runtime.advance_queue(ctx.guild.id)
 
     @commands.command(name="fuego", help="Interrupt current track, play a random Fuego song, then resume previous track.")
+    @commands.max_concurrency(1, per=commands.BucketType.guild, wait=False)
     async def fuego(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
+
+        if state.current and state.current.is_fuego and (state.is_playing() or state.is_paused()):
+            return await ctx.send("Fuego is already playing.")
 
         if not state.voice_client or not state.voice_client.is_connected():
             if not ctx.author.voice:
                 return await ctx.send("You need to be in a voice channel first.")
-            state.voice_client = await ctx.author.voice.channel.connect()
+            try:
+                state.voice_client = await self._connect_voice(ctx.guild, ctx.author.voice.channel)
+            except VoiceConnectionError as error:
+                return await ctx.send(f"Voice connection failed: {error}")
+        elif not ctx.author.voice or state.voice_client.channel != ctx.author.voice.channel:
+            return await ctx.send("Join my voice channel before using Fuego.")
         self.runtime.cancel_idle_disconnect(state)
 
         async with ctx.typing():
@@ -147,7 +269,7 @@ class Music(commands.Cog):
                 songs = await self.resolver.resolve_query(self.runtime.pick_fuego_query(state), ctx.author)
             except ValueError as error:
                 return await ctx.send(f"Error: {error}")
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - convert provider errors to a user response.
                 return await ctx.send(f"Something went wrong: {error}")
 
         if not songs:
@@ -155,15 +277,19 @@ class Music(commands.Cog):
 
         fuego_song = songs[0]
         fuego_song.is_fuego = True
-        interrupted_song = state.current if (state.current and (state.is_playing() or state.is_paused())) else None
-
         async with ctx.typing():
             try:
                 fuego_song.prepared_source = await self.runtime.prepare_playback_source(fuego_song.url)
             except ValueError as error:
                 return await ctx.send(f"Error preparing Fuego track: {error}")
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - convert provider errors to a user response.
                 return await ctx.send(f"Failed to prepare Fuego track: {error}")
+
+        if state.current and state.current.is_fuego and (state.is_playing() or state.is_paused()):
+            self.runtime.cleanup_song(fuego_song)
+            return await ctx.send("Fuego is already playing.")
+
+        interrupted_song = state.current if (state.current and (state.is_playing() or state.is_paused())) else None
 
         if interrupted_song:
             if state.is_playing():
@@ -175,7 +301,6 @@ class Music(commands.Cog):
                 interrupted_song.resume_at_seconds = min(elapsed_seconds, max(0, interrupted_song.duration - 1))
             else:
                 interrupted_song.resume_at_seconds = elapsed_seconds
-            interrupted_song.file_path = None
             interrupted_song.is_fuego = False
             state.interrupted_song = interrupted_song
             state.queue.appendleft(interrupted_song)
@@ -214,7 +339,7 @@ class Music(commands.Cog):
             await ctx.send(embed=self._song_embed("➕ Fuego Added Next", fuego_song, color=discord.Color.orange()))
 
     @commands.command(name="radio", aliases=["stations"], help="Play a radio station by name, or provide a direct stream URL.")
-    async def radio(self, ctx: commands.Context, *, station: Optional[str] = None):
+    async def radio(self, ctx: commands.Context, *, station: str | None = None):
         if not station or station.strip().lower() == "list":
             lines = [f"`{name}`" for name in sorted(set(RADIO_STATIONS.keys()))]
             embed = self._make_embed(
@@ -253,17 +378,19 @@ class Music(commands.Cog):
         state = self.get_state(ctx.guild.id)
         if not state.is_playing() and not state.is_paused():
             return await ctx.send("Nothing is playing.")
-        state.voice_client.stop()  # triggers _after_play → _advance_queue
+        state.voice_client.stop()
         await ctx.send("Skipped.")
 
     @commands.command(name="stop", help="Stop playback and clear the queue.")
     async def stop(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
-        state.queue.clear()
+        self.runtime.clear_queue(state)
         state.loop = False
+        state.skip_loop_once = False
+        state.interrupted_song = None
         if state.voice_client and (state.is_playing() or state.is_paused()):
             state.voice_client.stop()
-            state.current = None
+        state.current = None
         await self.runtime.refresh_idle_disconnect(ctx.guild.id)
         await ctx.send("Stopped and queue cleared.")
 
@@ -319,7 +446,7 @@ class Music(commands.Cog):
     @commands.command(name="clear", help="Clear the queue without stopping current song.")
     async def clear(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
-        state.queue.clear()
+        self.runtime.clear_queue(state)
         await self.runtime.refresh_idle_disconnect(ctx.guild.id)
         await ctx.send("Queue cleared.")
 
@@ -331,13 +458,17 @@ class Music(commands.Cog):
         queue_list = list(state.queue)
         removed = queue_list.pop(position - 1)
         state.queue = deque(queue_list)
+        if state.interrupted_song is removed:
+            state.interrupted_song = None
+        self.runtime.cleanup_song(removed)
         await ctx.send(f"Removed: **{removed.title}**")
 
-    @commands.command(name="volume", aliases=["vol"], help="Set volume (0-100). Not supported with stream audio.")
+    @commands.command(name="volume", aliases=["vol"], help="Set volume (0-100).")
     async def volume(self, ctx: commands.Context, vol: int):
         if not 0 <= vol <= 100:
             return await ctx.send("Volume must be between 0 and 100.")
         state = self.get_state(ctx.guild.id)
+        state.volume = vol / 100
         if state.voice_client and state.voice_client.source:
             if isinstance(state.voice_client.source, discord.PCMVolumeTransformer):
                 state.voice_client.source.volume = vol / 100
@@ -347,7 +478,7 @@ class Music(commands.Cog):
                 )
             await ctx.send(f"Volume set to **{vol}%**.")
         else:
-            await ctx.send("Nothing is playing.")
+            await ctx.send(f"Volume set to **{vol}%** for the next track.")
 
     @commands.command(name="shuffle", help="Shuffle the queue.")
     async def shuffle(self, ctx: commands.Context):

@@ -36,8 +36,10 @@ class GuildMusicState:
         self.current_started_at: float | None = None
         self.current_pause_started_at: float | None = None
         self.current_paused_total = 0.0
+        self.volume = 1.0
         self.idle_disconnect_task: asyncio.Task | None = None
-        self._play_next_event = asyncio.Event()
+        self.connect_lock = asyncio.Lock()
+        self.advance_lock = asyncio.Lock()
 
     def is_playing(self) -> bool:
         return self.voice_client is not None and self.voice_client.is_playing()
