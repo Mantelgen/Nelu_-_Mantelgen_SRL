@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -7,22 +8,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# FFmpeg
-_FFMPEG_CANDIDATES = [
-    Path(r"D:\3. Aplicatii si torrenturi\ffmpeg-2026-04-06-git-7fd2be97b9-full_build\ffmpeg-2026-04-06-git-7fd2be97b9-full_build\bin\ffmpeg.exe"),
-    Path(r"C:\Users\Cosmin\AppData\Local\Overwolf\Extensions\ncfplpkmiejjaklknfnkgcpapnhkggmlcppckhcb\270.0.25\obs\bin\64bit\ffmpeg.exe"),
-]
+PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 
 def _find_ffmpeg() -> str:
-    for path in _FFMPEG_CANDIDATES:
-        if path.exists():
-            return str(path)
-    return "ffmpeg"
+    configured = os.getenv("FFMPEG_EXECUTABLE", "").strip()
+    if configured:
+        return configured
+    return shutil.which("ffmpeg") or "ffmpeg"
 
 
 FFMPEG_EXECUTABLE = _find_ffmpeg()
-FFPROBE_EXECUTABLE = FFMPEG_EXECUTABLE.replace("ffmpeg.exe", "ffprobe.exe")
 FFMPEG_OPTIONS = {
     "before_options": "-nostdin",
     "options": "-vn -loglevel warning",
@@ -54,12 +50,13 @@ def build_ytdl_options() -> dict:
     if cookies_file:
         options["cookiefile"] = cookies_file
     else:
-        for default_cookie_path in [
-            Path("secrets/youtube_cookies.txt"),
-            Path("youtube_cookies.txt"),
-            Path("secrets/cookies.txt"),
-            Path("cookies.txt"),
+        for relative_cookie_path in [
+            "secrets/youtube_cookies.txt",
+            "youtube_cookies.txt",
+            "secrets/cookies.txt",
+            "cookies.txt",
         ]:
+            default_cookie_path = PROJECT_DIR / relative_cookie_path
             if default_cookie_path.exists():
                 options["cookiefile"] = str(default_cookie_path)
                 break
@@ -119,11 +116,19 @@ RADIO_STATIONS = {
     "rockfm": "https://live.rockfm.ro/rockfm.aacp",
 }
 
-DJ_ROLE_NAME = os.getenv("DJ_ROLE_NAME", "DJ").strip() or "DJ"
-
 try:
     MUSIC_IDLE_TIMEOUT_MINUTES = max(0, int(os.getenv("MUSIC_IDLE_TIMEOUT_MINUTES", "10")))
 except ValueError:
     MUSIC_IDLE_TIMEOUT_MINUTES = 10
 
 MUSIC_IDLE_TIMEOUT_SECONDS = MUSIC_IDLE_TIMEOUT_MINUTES * 60
+
+try:
+    VOICE_CONNECT_TIMEOUT_SECONDS = max(10.0, float(os.getenv("VOICE_CONNECT_TIMEOUT_SECONDS", "30")))
+except ValueError:
+    VOICE_CONNECT_TIMEOUT_SECONDS = 30.0
+
+try:
+    VOICE_CONNECT_RETRIES = max(0, min(3, int(os.getenv("VOICE_CONNECT_RETRIES", "1"))))
+except ValueError:
+    VOICE_CONNECT_RETRIES = 1

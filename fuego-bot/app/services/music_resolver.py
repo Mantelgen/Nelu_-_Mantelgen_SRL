@@ -63,8 +63,8 @@ class MusicResolverService:
                 try:
                     found = await self.search_youtube(search_query, requester)
                     songs.extend(found)
-                except Exception:
-                    pass
+                except ValueError as error:
+                    print(f"[WARN] Skipping Spotify playlist track '{search_query}': {error}")
             return songs
 
         return await self.fetch_ytdl(query, requester)
