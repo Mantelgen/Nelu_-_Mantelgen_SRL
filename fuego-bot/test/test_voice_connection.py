@@ -19,10 +19,21 @@ class FakeVoiceClient:
         self.cleaned = True
 
 
+class FakePermissions:
+    def __init__(self, *, view_channel=True, connect=True, speak=True):
+        self.view_channel = view_channel
+        self.connect = connect
+        self.speak = speak
+
+
 class FakeChannel:
-    def __init__(self, outcomes):
+    def __init__(self, outcomes, permissions=None):
         self.outcomes = list(outcomes)
         self.connect_calls = []
+        self.permissions = permissions or FakePermissions()
+
+    def permissions_for(self, member):
+        return self.permissions
 
     async def connect(self, **kwargs):
         self.connect_calls.append(kwargs)
@@ -36,6 +47,7 @@ class FakeGuild:
     def __init__(self):
         self.id = 123
         self.voice_client = None
+        self.me = object()
 
 
 class FakeBot:
@@ -81,6 +93,18 @@ class VoiceConnectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(music.get_state(guild.id).voice_client)
         self.assertEqual(len(channel.connect_calls), 2)
+
+    async def test_missing_speak_permission_does_not_block_connection(self):
+        guild = FakeGuild()
+        channel = FakeChannel([], permissions=FakePermissions(speak=False))
+        voice_client = FakeVoiceClient(channel)
+        channel.outcomes = [voice_client]
+        music = Music(FakeBot(guild))
+
+        connected = await music._connect_voice(guild, channel)
+
+        self.assertIs(connected, voice_client)
+        self.assertEqual(len(channel.connect_calls), 1)
 
 
 if __name__ == "__main__":
