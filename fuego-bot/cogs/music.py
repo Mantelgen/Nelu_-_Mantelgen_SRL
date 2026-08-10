@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import random
 from collections import deque
 
@@ -17,6 +18,8 @@ from app.services.music_runtime import MusicRuntimeService
 from app.ui.music_views import FuegoControlsView, PlayerControlsView
 
 print(f"[INFO] Using ffmpeg:  {FFMPEG_EXECUTABLE}")
+
+logger = logging.getLogger(__name__)
 
 
 class VoiceConnectionError(RuntimeError):
@@ -97,13 +100,26 @@ class Music(commands.Cog):
     ) -> discord.VoiceClient:
         state = self.get_state(guild.id)
         async with state.connect_lock:
+            me = guild.me
+            if me is not None:
+                permissions = channel.permissions_for(me)
+                missing_permissions = [
+                    name
+                    for name, allowed in (("Connect", permissions.connect), ("Speak", permissions.speak))
+                    if not allowed
+                ]
+                if missing_permissions:
+                    raise VoiceConnectionError(
+                        f"I need the {', '.join(missing_permissions)} permission(s) in that voice channel."
+                    )
+
             current = guild.voice_client or state.voice_client
             if current and current.is_connected():
                 state.voice_client = current
                 if current.channel != channel:
                     try:
                         await current.move_to(channel, timeout=VOICE_CONNECT_TIMEOUT_SECONDS)
-                    except TimeoutError as error:
+                    except (TimeoutError, asyncio.TimeoutError) as error:
                         raise VoiceConnectionError("Timed out while moving to your voice channel.") from error
                 return current
 
@@ -120,10 +136,13 @@ class Music(commands.Cog):
                     )
                     state.voice_client = voice_client
                     return voice_client
-                except TimeoutError as error:
-                    print(
-                        f"[WARN] Voice connection timed out in guild {guild.id} "
-                        f"(attempt {attempt}/{attempts})"
+                except (TimeoutError, asyncio.TimeoutError) as error:
+                    logger.warning(
+                        "Voice connection timed out in guild %s (attempt %s/%s)",
+                        guild.id,
+                        attempt,
+                        attempts,
+                        exc_info=True,
                     )
                     await self._discard_voice_client(state, guild)
                     if attempt < attempts:
@@ -148,6 +167,14 @@ class Music(commands.Cog):
                 except discord.HTTPException as error:
                     await self._discard_voice_client(state, guild)
                     raise VoiceConnectionError("Discord rejected the voice connection request.") from error
+                except RuntimeError as error:
+                    await self._discard_voice_client(state, guild)
+                    message = str(error).lower()
+                    if "pynacl" in message or "davey" in message:
+                        raise VoiceConnectionError(
+                            "Voice support is incomplete. Install the packages from requirements.txt and restart the bot."
+                        ) from error
+                    raise VoiceConnectionError(f"Could not connect to voice: {error}") from error
 
         raise VoiceConnectionError("Could not connect to the voice channel.")
 

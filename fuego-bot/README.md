@@ -79,4 +79,9 @@ bash run.sh
 - Keep `.env` private and never commit it.
 - Keep `secrets/` private and out of version control.
 - Enable the Message Content Intent for the bot in the Discord Developer Portal.
+- Give the bot Connect and Speak permissions in the target voice channel.
 - Users must join the bot's voice channel before adding music or using player buttons.
+
+If voice joining times out, check the bot console for `Starting voice handshake` and
+`Voice handshake complete`. The log identifies whether Discord is not returning the
+voice state/server events or whether the voice websocket is failing.
