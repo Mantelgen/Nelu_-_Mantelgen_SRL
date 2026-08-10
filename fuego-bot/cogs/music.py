@@ -103,14 +103,13 @@ class Music(commands.Cog):
             me = guild.me
             if me is not None:
                 permissions = channel.permissions_for(me)
-                missing_permissions = [
-                    name
-                    for name, allowed in (("Connect", permissions.connect), ("Speak", permissions.speak))
-                    if not allowed
-                ]
-                if missing_permissions:
+                # Speak is not required for the Discord voice handshake. In
+                # particular, Stage channels report speak=False until the bot is
+                # promoted to a speaker. Only block permissions that prevent the
+                # bot from seeing or joining the target channel at all.
+                if not permissions.view_channel or not permissions.connect:
                     raise VoiceConnectionError(
-                        f"I need the {', '.join(missing_permissions)} permission(s) in that voice channel."
+                        "I need the View Channel and Connect permissions in that voice channel."
                     )
 
             current = guild.voice_client or state.voice_client
@@ -154,7 +153,7 @@ class Music(commands.Cog):
                 except discord.Forbidden as error:
                     await self._discard_voice_client(state, guild)
                     raise VoiceConnectionError(
-                        "I need the Connect and Speak permissions in that voice channel."
+                        "Discord denied the connection. Check the channel's View Channel and Connect permissions."
                     ) from error
                 except discord.ClientException as error:
                     # A timed-out connection can remain registered briefly. Clean
